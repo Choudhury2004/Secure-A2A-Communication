@@ -33,6 +33,9 @@ The project simulates both **verified and unverified** communications between ai
 | Visualization | Matplotlib |
 | Data Processing | NumPy, Pandas |
 | AI / Anomaly Detection | Scikit-learn (IsolationForest) |
+| Security | Cryptography (RSA) |
+| Video Encoding | FFmpeg |
+| Environment | venv (Virtual Environment) |
 
 ## 📁 Project Structure
 airborne-comms-sim/
