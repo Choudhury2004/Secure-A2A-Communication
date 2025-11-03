@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """
-airborne_comms_unified.py
+airborne_comms_with_enriched_csv_v3.py
 
-Enhanced ATC-style radar simulation:
-- 30 realistic flights (callsigns)
-- RSA signing + verification for secure A2A messages
-- IsolationForest ML anomaly detection (3 colors: green/yellow/red)
-- Color-coded communication lines (green=verified, red=unverified)
-- Flights spawn from radar boundary and move inward
-- Radar sweep animation + CSV logging + MP4 output
+Updates:
+- Introduces a forced signature-failure probability for in-range comms
+  (FORCED_SIG_FAIL_PROB = 0.30 => 30% of otherwise-verified messages are forced to fail)
+- Keeps animation & visuals unchanged (green = accepted, red = failed)
+- Logs EVERY attempt; distance always recorded
+- CSV format: Frame, Timestamp, Sender, Receiver, Distance, Status, Reason
 """
 
 import random
 import math
 import time
 import csv
+import datetime
 from dataclasses import dataclass
 
 # headless-friendly backend
@@ -39,8 +39,11 @@ COMM_MAX_ACTIVE = 4
 COMM_DURATION_FRAMES = 50
 ML_RETRAIN_INTERVAL = 150
 OUTPUT_FILENAME = "airborne_comms_unified.mp4"
-CSV_LOG = "comms_log.csv"
+CSV_LOG = "comms_enriched_log_v3.csv"
 RNG_SEED = 42
+
+# Forced signature-failure probability for in-range messages (30%)
+FORCED_SIG_FAIL_PROB = 0.30
 
 random.seed(RNG_SEED)
 np.random.seed(RNG_SEED)
@@ -102,7 +105,6 @@ class Flight:
 
 # ---------------- Initialization ----------------
 def spawn_flight_from_boundary():
-    """Spawn flight from radar edge with inward velocity"""
     angle = random.uniform(0, 2 * math.pi)
     x = RANGE * math.cos(angle)
     y = RANGE * math.sin(angle)
@@ -147,10 +149,11 @@ last_ml_train_frame = 0
 # ---------------- CSV LOGGING ----------------
 csv_file = open(CSV_LOG, "w", newline="")
 csv_writer = csv.writer(csv_file)
-csv_writer.writerow(["Frame", "Event", "FlightA", "FlightB", "Distance", "Status"])
+csv_writer.writerow(["Frame", "Timestamp", "Sender", "Receiver", "Distance", "Status", "Reason"])
 
-def log_event(f, event, a, b, dist, status):
-    csv_writer.writerow([f, event, a, b, f"{dist:.1f}", status])
+def write_log(frame, sender, receiver, dist, status, reason):
+    ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    csv_writer.writerow([frame, ts, sender, receiver, f"{dist:.1f}", status, reason])
 
 # ---------------- Matplotlib setup ----------------
 fig, ax = plt.subplots(figsize=(8, 8), facecolor="black")
@@ -171,10 +174,10 @@ labels = [ax.text(0, 0, "", color="white", fontsize=7) for _ in flights]
 active_comms = []
 
 # ---------------- Color logic ----------------
-def get_ml_color(f, model):
+def get_ml_color(f):
     feat = np.array([[f.x, f.y, f.vx, f.vy]])
     scaled = scaler.transform(feat)
-    score = model.decision_function(scaled)[0]
+    score = ml_model.decision_function(scaled)[0]
     if score > 0.05:
         return "lime"
     elif score > -0.02:
@@ -195,34 +198,55 @@ def update(frame):
 
     for f in flights:
         if f.alive:
-            f.color = get_ml_color(f, ml_model)
+            f.color = get_ml_color(f)
 
-    # Clean expired comms
+    # Clean expired comm lines
     for comm in active_comms[:]:
         comm["frames"] -= 1
         if comm["frames"] <= 0:
-            try: comm["line"].remove()
-            except: pass
+            try:
+                comm["line"].remove()
+            except:
+                pass
             active_comms.remove(comm)
 
-    # Attempt new comm
-    if len(active_comms) < COMM_MAX_ACTIVE and random.random() < COMM_PROB:
+    # COMM ATTEMPT (probabilistic)
+    if random.random() < COMM_PROB:
         alive_idx = [i for i, f in enumerate(flights) if f.alive]
         if len(alive_idx) >= 2:
             i, j = random.sample(alive_idx, 2)
             f1, f2 = flights[i], flights[j]
             dist = math.hypot(f1.x - f2.x, f1.y - f2.y)
+
             if dist <= COMM_RANGE:
+                # In range → create + sign + verify
                 msg = f"POS:{f1.callsign}:{f1.x:.1f},{f1.y:.1f}:{int(time.time())}"
                 sig = f1.sign(msg)
                 verified = verify_message(f1.public_key, msg.encode("utf-8"), sig)
-                line_color = "lime" if verified else "red"
-                line_obj, = ax.plot([f1.x, f2.x], [f1.y, f2.y], color=line_color, lw=1.3, alpha=0.8)
-                active_comms.append({"i": i, "j": j, "frames": COMM_DURATION_FRAMES, "line": line_obj})
-                status = "Verified" if verified else "Unverified"
-                log_event(frame, "A2AComm", f1.callsign, f2.callsign, dist, status)
 
-    # Radar sweep
+                # Force some verified messages to fail to simulate tampering
+                if verified and random.random() < FORCED_SIG_FAIL_PROB:
+                    verified = False  # forced failure
+
+                if verified:
+                    # ACCEPTED
+                    line_color = "lime"
+                    write_log(frame, f1.callsign, f2.callsign, dist, "ACCEPTED", "")
+                else:
+                    # RSA FAIL (forced or actual)
+                    line_color = "red"
+                    write_log(frame, f1.callsign, f2.callsign, dist, "FAILED", "Signature Failed")
+
+                # Draw comm line visually (unchanged behavior)
+                if len(active_comms) < COMM_MAX_ACTIVE:
+                    line_obj, = ax.plot([f1.x, f2.x], [f1.y, f2.y], color=line_color, lw=1.3, alpha=0.8)
+                    active_comms.append({"frames": COMM_DURATION_FRAMES, "line": line_obj})
+
+            else:
+                # OUT OF RANGE → still log actual distance
+                write_log(frame, f1.callsign, f2.callsign, dist, "FAILED", "No Link Established")
+
+    # Radar sweep update
     ang = math.radians((frame * 2) % 360)
     sweep_line.set_data([0, (RANGE + 8) * math.cos(ang)], [0, (RANGE + 8) * math.sin(ang)])
 
@@ -242,10 +266,10 @@ def update(frame):
     return artists
 
 # ---------------- Run & Save ----------------
-print("🚀 Starting enhanced radar simulation (with 30 flights)...")
+print("🚀 Starting radar + enriched CSV logging (v3 with forced signature failures)...")
 anim = FuncAnimation(fig, update, frames=FRAME_COUNT, interval=70, blit=True)
 video_writer = FFMpegWriter(fps=25)
 anim.save(OUTPUT_FILENAME, writer=video_writer, dpi=160)
 csv_file.close()
 print(f"🎬 Video saved: {OUTPUT_FILENAME}")
-print(f"📄 Log saved: {CSV_LOG}")
+print(f"📄 Enriched log saved: {CSV_LOG}")
