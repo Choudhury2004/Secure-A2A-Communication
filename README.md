@@ -1,50 +1,44 @@
 # Secure-A2A-Communication
-A **Linux-based radar simulation system** that visualizes secure **air-to-air (A2A)** communication between aircraft with **cryptographic authentication** and **AI-driven threat detection**.  
-The project simulates both **verified and unverified** communications between aircraft, color-coded on a radar interface, and logs all interactions to a CSV file.
+This project simulates a secure Air Traffic Control (ATC) radar that tracks commercial flights, performs RSA-based secure communication, detects anomalies using Machine Learning (Isolation Forest), and dynamically visualizes critical aircraft system failures in real-time.
 
-## 🚀 Features
+## 🚀 Key Features
 
-- **Real-Time Radar Visualization**  
-  - Simulates 30 aircraft flying across a radar screen with smooth motion.  
-  - Flights appear dynamically over time (not all at once).  
+🔐 Secure A2A Communication (ADS-B-Style Messaging)
+  1. Flights within communication range exchange encrypted position messages.
+  2. Each message is digitally signed using RSA-2048.
+  3. Signature verification simulated using PKCS1 v1.5 + SHA-256.
+  4. Communication failures are visually highlighted in red on radar.
 
-- **Secure Communication (Crypto Layer)**  
-  - Messages between flights are authenticated using **RSA digital signatures**.  
-  - Verified (green) and unverified (red) communication lines are color-coded.  
-
-- **AI-Based Threat Detection**  
-  - Uses **IsolationForest (scikit-learn)** to detect suspicious or spoofed flights.  
-  - Radar colors dynamically reflect aircraft security status.  
-
-- **Comprehensive CSV Logging**  
-  - Logs both verified and unverified communications with timestamps, flight IDs, distance, and status.  
-
-- **Video Export**  
-  - Generates an **MP4 radar simulation** using **FFmpeg** for presentation or research demonstrations.
-
+🧠 ML-Powered Flight Anomaly Detection
+  1. Uses Isolation Forest to analyze flight movement in real time.
+  2. Flights change color based on detected behavior:
+    Normal	        🟢 Lime
+    Mild anomaly    🟡 Yellow
+    Severe anomaly	🔴 Red
 ---
 
 ## 🧠 Tech Stack
 
-| Category | Tools / Libraries |
-|-----------|------------------|
-| Language | Python 3.12 |
-| OS / Platform | Linux |
-| Visualization | Matplotlib |
-| Data Processing | NumPy, Pandas |
-| AI / Anomaly Detection | Scikit-learn (IsolationForest) |
-| Security | Cryptography (RSA) |
-| Video Encoding | FFmpeg |
-| Environment | venv (Virtual Environment) |
+| Domain           | Tools Used                                                 |
+| ---------------- | ---------------------------------------------------------- |
+| Language         | Python (Matplotlib, NumPy, Dataclasses)                    |
+| Cryptography     | RSA-2048, SHA-256 (cryptography library)                   |
+| Machine Learning | Isolation Forest (Scikit-Learn)                            |
+| Visualization    | Matplotlib                                                 |
+| Logging          | CSV event recorder                                         |
 
 ## 📁 Project Structure
-airborne-comms-sim/
+📁 Secure-Airborne-ATC-Simulation/
 │
-├── airborne_comms_unified.py # Main simulation script
-├── comms_log.csv # Generated CSV log (output)
-├── radar_simulation.mp4 # Video output (generated)
-├── venv/ # Python virtual environment
-└── README.md # Project documentation
-| Security | Cryptography (RSA) |
-| Video Encoding | FFmpeg |
-| Environment | venv (Virtual Environment) |
+├── 📂 myenv/                      # Local virtual environment (should be ignored on GitHub)
+├── 📂 venv/                       # Another virtual environment (should be ignored)
+│
+├── 🎥 airborne_comms_unified_with_faults_fixed.mp4
+├── 🎥 airborne_comms_unified_with_faults_random5.mp4
+│        # Radar animation videos with secure comms & faults
+│
+├── 🐍 airborne_comms_with_enriched_csv_v3.py
+│        # Python source (generates video + CSV logs)
+│
+├── 📄 comms_enriched_log_fixed.csv
+├── 📄 comms_enriched_log_v5_random5.csv
