@@ -29,6 +29,8 @@ Final consolidated script:
       the radar for at least 8 seconds (~200 frames) AFTER the fault occurs.
     * The time difference between one faulty flight and another is increased
       (larger MIN_FAULT_GAP) to look more realistic.
+    * NEW: Every 5 seconds (125 frames), each alive flight sends an ADS-B style
+      "HEALTH_BROADCAST" to ATC, logging its state and active faults into the CSV.
 """
 
 import random
@@ -62,8 +64,10 @@ ML_RETRAIN_INTERVAL = 150
 OUTPUT_FILENAME = "airborne_comms_unified_with_faults_random5.mp4"
 CSV_LOG = "comms_enriched_log_v5_random5.csv"
 
-# NOTE: we do NOT seed random/np.random on purpose,
-# so every run gives different flights/faults/frames.
+# ADS-B style health broadcast every 5 seconds
+HEALTH_BROADCAST_INTERVAL_FRAMES = 125  # 5s * 25fps
+
+# NOTE: we do NOT seed random/np.random on purpose for variability between runs.
 RNG_SEED = 42  # only used for IsolationForest, not for global random()
 
 CALLSIGNS = [
@@ -185,14 +189,19 @@ flights = []
 for i in range(NUM_FLIGHTS):
     x, y, vx, vy = spawn_flight_from_boundary()
     priv, pub = generate_rsa_keypair()
-    flights.append(Flight(callsign=CALLSIGNS[i], x=x, y=y, vx=vx, vy=vy,
-                          private_key=priv, public_key=pub))
+    flights.append(
+        Flight(
+            callsign=CALLSIGNS[i],
+            x=x, y=y, vx=vx, vy=vy,
+            private_key=priv, public_key=pub
+        )
+    )
 
 # ---------------- Helper: exit frame ----------------
 FRAME_DURATION_SEC = 1.0 / 25.0
 def compute_exit_frame_for_flight(f: Flight, max_search=FRAME_COUNT):
     x, y, vx, vy = f.x, f.y, f.vx, f.vy
-    for fr in range(0, max_search+1):
+    for fr in range(0, max_search + 1):
         if math.hypot(x, y) > RANGE:
             return fr
         x += vx
@@ -233,28 +242,29 @@ def write_log(frame, sender, receiver, dist, status, reason):
     csv_file.flush()
 
 # ---------------- Matplotlib ----------------
-fig, ax = plt.subplots(figsize=(8,8), facecolor="black")
+fig, ax = plt.subplots(figsize=(8, 8), facecolor="black")
 ax.set_facecolor("black")
-ax.set_xlim(-RANGE-10, RANGE+10)
-ax.set_ylim(-RANGE-10, RANGE+10)
+ax.set_xlim(-RANGE - 10, RANGE + 10)
+ax.set_ylim(-RANGE - 10, RANGE + 10)
 ax.set_xticks([]); ax.set_yticks([])
 ax.set_title("ATC Radar — Secure Airborne Communication", color="lime", fontsize=14)
-for r in range(20, RANGE+1, 20):
-    ax.add_patch(plt.Circle((0,0), r, color="green", fill=False, linestyle="dotted", alpha=0.45))
+for r in range(20, RANGE + 1, 20):
+    ax.add_patch(plt.Circle((0, 0), r, color="green", fill=False, linestyle="dotted", alpha=0.45))
 ax.axhline(0, color="green", lw=0.5, alpha=0.4)
 ax.axvline(0, color="green", lw=0.5, alpha=0.4)
 
 sweep_line, = ax.plot([], [], color="lime", lw=1.5, alpha=0.9)
 dots = [ax.plot([], [], "o", color="lime", markersize=6)[0] for _ in flights]
-labels = [ax.text(0,0,"", color="white", fontsize=7) for _ in flights]
+labels = [ax.text(0, 0, "", color="white", fontsize=7) for _ in flights]
 active_comms = []
 
 # ATC alert panel
-alert_text = ax.text(-RANGE+5, RANGE-8, "", color="red", fontsize=9, va="top", ha="left",
-                     bbox=dict(facecolor='black', alpha=0.6, edgecolor='red'))
+alert_text = ax.text(
+    -RANGE + 5, RANGE - 8, "", color="red", fontsize=9, va="top", ha="left",
+    bbox=dict(facecolor='black', alpha=0.6, edgecolor='red')
+)
 
 # ---------------- Fault scheduling: choose 5 random fault types ----------------
-
 ALL_FAULT_TYPES = [
     "fuel_leak",
     "engine_failure",
@@ -322,15 +332,12 @@ def choose_frame_for_flight(desired_min, desired_max, exit_f):
     lower = desired_min
 
     if upper < lower:
-        # not much room: place as early as we can within MIN_FRAME,
-        # still trying to keep some visibility if possible
         candidate = min(desired_max, max(MIN_FRAME, upper_limit))
         return max(MIN_FRAME, candidate)
     return random.randint(lower, upper)
 
 for ft, idx, base_frame in sorted_faults:
     exit_f = exit_frames[idx]
-    # allowed window for this fault: after both base_frame and MIN_FAULT_GAP from previous
     candidate_min = max(base_frame, last_fault_frame + MIN_FAULT_GAP, MIN_FRAME)
     candidate_max = FRAME_COUNT - 1  # we'll clamp inside choose_frame_for_flight
 
@@ -380,8 +387,40 @@ def update(frame):
         if f.alive:
             f.consume_fuel(FRAME_DURATION_SEC)
 
-    # Trigger each scheduled fault exactly once (if that fault type is chosen)
-    # and only if the flight is still alive.
+    # ---------------- ADS-B style health broadcasts every 5 seconds ----------------
+    if frame % HEALTH_BROADCAST_INTERVAL_FRAMES == 0:
+        for f in flights:
+            if not f.alive:
+                continue
+            faults = []
+            if f.leak_active:
+                faults.append("fuel_leak")
+            if f.engine_failed:
+                faults.append("engine_failure")
+            if f.control_failed:
+                faults.append("control_failure")
+            if f.electrical_failed:
+                faults.append("electrical_failure")
+            if f.pressurization_failed:
+                faults.append("pressurization_failure")
+            if f.sensor_failed:
+                faults.append("sensor_failure")
+            if f.autopilot_failed:
+                faults.append("autopilot_failure")
+            if f.fire_warning:
+                faults.append("fire_warning")
+            if f.structural_failed:
+                faults.append("structural_failure")
+
+            faults_str = ",".join(faults) if faults else "none"
+            reason = (
+                f"STATE x={f.x:.1f} y={f.y:.1f} "
+                f"vx={f.vx:.2f} vy={f.vy:.2f} "
+                f"faults={faults_str}"
+            )
+            write_log(frame, f.callsign, "ATC", 0.0, "HEALTH_BROADCAST", reason)
+
+    # ---------------- Fault triggers (each exactly once) ----------------
 
     # Fuel leak
     if "fuel_leak" in fault_schedule and frame == fault_schedule["fuel_leak"]["frame"]:
@@ -520,8 +559,10 @@ def update(frame):
                     line_color = "red"
                     write_log(frame, f1.callsign, f2.callsign, dist, "FAILED", "Signature Failed")
                 if len(active_comms) < COMM_MAX_ACTIVE:
-                    line_obj, = ax.plot([f1.x, f2.x], [f1.y, f2.y],
-                                        color=line_color, lw=1.3, alpha=0.8)
+                    line_obj, = ax.plot(
+                        [f1.x, f2.x], [f1.y, f2.y],
+                        color=line_color, lw=1.3, alpha=0.8
+                    )
                     active_comms.append({"frames": COMM_DURATION_FRAMES, "line": line_obj})
             else:
                 write_log(frame, f1.callsign, f2.callsign, dist, "FAILED", "No Link Established")
@@ -552,8 +593,10 @@ def update(frame):
 
     # radar sweep
     ang = math.radians((frame * 2) % 360)
-    sweep_line.set_data([0, (RANGE + 8) * math.cos(ang)],
-                        [0, (RANGE + 8) * math.sin(ang)])
+    sweep_line.set_data(
+        [0, (RANGE + 8) * math.cos(ang)],
+        [0, (RANGE + 8) * math.sin(ang)]
+    )
 
     # update dots and labels; faulty flights blink until exit
     for idx, f in enumerate(flights):
@@ -601,7 +644,7 @@ def update(frame):
     return artists
 
 # ---------------- Run & Save ----------------
-print("🚀 Starting radar + enriched CSV logging (random5 faults, blink until exit, 8s visibility)...")
+print("🚀 Starting radar + enriched CSV logging (random5 faults, health beacons, blink until exit, 8s visibility)...")
 anim = FuncAnimation(fig, update, frames=FRAME_COUNT, interval=40, blit=True)
 video_writer = FFMpegWriter(fps=25)
 anim.save(OUTPUT_FILENAME, writer=video_writer, dpi=160)
